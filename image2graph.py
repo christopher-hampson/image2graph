@@ -110,16 +110,6 @@ class ImageArray:
 
 
 
-	def get_components(self):
-		## returns a list of all components
-		components = dict()
-		for i in self.root:
-			components[self.root[i]] = components.get(self.root[i],set()) | set([i])
-
-		for v in components:
-			print v, components, "\n"
-
-
 	def find_vertices(self):
 		## Generates list of all vertices and stores in self.vertices
 
