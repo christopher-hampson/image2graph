@@ -15,8 +15,8 @@ class ImageArray:
 	def __init__(self,filename):
 		self.img = imread(filename)
 		self.img.flags.writeable = True
-		self.root = {}
-		self.size = {}
+		self.root = dict([((x,y),(x,y)) for x in xrange(self.width()) for y in xrange(self.height())])
+		self.size = dict([((x,y),1) for x in xrange(self.width()) for y in xrange(self.height())])
 		self.bg = self.color(0,0)	# set background color as top-left pixel
 		self.edges = None
 		self.vertices = None
@@ -43,19 +43,25 @@ class ImageArray:
 			return self.bg_color()
 		try:
 			return tuple(self.img[y][x])
-		except:
+		except IndexError:
 			return self.bg_color()
 
 	def get_root(self,key):
 		## Two keys have the same root iff they belong to the same component
-		while key!=self.root.get(key,key):
-			key = self.root.get(key,key)
+		parent = self.root.get(key,key)
+		while key!=parent:
+			key = parent 
+			parent = self.root.get(key,key)
+
 		return key
 
 
 	def union(self,a,b):
 		if type(a)!= tuple or type(b)!=tuple:
 			raise Exception("Expected types for union must be tuples.")
+
+		if a not in self.root or b not in self.root:
+			return
 
 		r1=self.get_root(a)
 		r2=self.get_root(b)
@@ -65,12 +71,14 @@ class ImageArray:
 
 		if r1==r2:
 			return None
-		if sz1 <= sz2:
+		if sz1 < sz2:
 			self.root[r1] = r2
-			self.size[r2] = self.size.get(r2,1) + sz1
+			self.size[r2] = sz2+1
+			self.size[r1] = None
 		else:
 			self.root[r2] = r1
-			self.size[r1] = self.size.get(r1,1) + sz2
+			self.size[r1] = sz1+1
+			self.size[r2]=None
 
 
 	def get_component_roots(self):
@@ -84,13 +92,13 @@ class ImageArray:
 		list_of_roots = self.get_component_roots()
 		if key not in list_of_roots:
 			raise Exception("Key must be one of the following roots: {0}".format(str(list_of_roots)))
-		return set([(x,y) for x in range(self.width()) for y in range(self.height()) if self.get_root((x,y))==key])
+		return set([(x,y) for x in xrange(self.width()) for y in xrange(self.height()) if self.get_root((x,y))==key])
 
 	def get_local_square(self,x,y,d=1):
 		## Returns set of points in the (2d+1)x(2d+1) square 
 		## belonging to the same component as (x,y).
 
-		square = [(x+i,y+j) for i in range(-d,d+1) for j in range(-d,d+1)]
+		square = [(x+i,y+j) for i in xrange(-d,d+1) for j in xrange(-d,d+1)]
 		return set([(a-x,b-y) for (a,b) in square if self.get_root((x,y))==self.get_root((a,b))])
 
 
@@ -166,7 +174,7 @@ class ImageArray:
 
 			# gets the midpoint of each cluster
 			for S in d.values():
-				midpoint = tuple(np.average([list(node) for node in S],axis=0).astype(int))
+				midpoint = self.midpoint(S)
 				if midpoint not in vertices:
 					vertices.append(midpoint)
 
@@ -178,24 +186,24 @@ class ImageArray:
 	def remove_square(self,x,y,d=5):
 		## Removes a square of diameter (2*d+1) centered at (x,y) 
 		x,y = int(x),int(y)
-		square = [(x+i,y+j) for i in range(-d,d+1) for j in range(-d,d+1)]
+		square = [(x+i,y+j) for i in xrange(-d,d+1) for j in xrange(-d,d+1)]
 		for (a,b) in square:
 			try:
 				self.img[b,a] = list(self.bg_color())	# overwrite the corner pixels in whit
 			except:
 				pass
-		#img.show()
+
 
 
 	def find_components(self):
 		## Finds all connected components by applying
 		## Quick-union on neighbouring points that share the same colour
 
-		neighbours = [(-1,0), (-1,1), (0,1), (1,1)]		# list of relative positions of upper-left neighbours
+		neighbours = [(-1,0), (-1,-1), (0,-1), (-1,1)]	# list of relative positions of upper-left neighbours
 														# (lower right are caught symmetrically)
 
-		for x in range(self.width()):
-			for y in range(self.height()):
+		for x in xrange(self.width()):
+			for y in xrange(self.height()):
 				c = self.color(x,y)
 				for (i,j) in neighbours:		
 					if c==self.color(x+i,y+j):
@@ -203,37 +211,68 @@ class ImageArray:
 						self.union((x,y),(x+i,y+j))
 
 
-	def find_edges(self):
+	def find_edges(self,d=5):
 		## Generates list of all edges and stores in self.edges
 
 		# remove a square of radius 5 from each vertex
 		for (x,y) in self.get_vertices():
-			self.remove_square(x,y,d=5)
+			self.remove_square(x,y,d=d)
 
 		# reset root and size
-		self.root = {}
-		self.size = {}
+		self.root = dict([((x,y),(x,y)) for x in xrange(self.width()) for y in xrange(self.height())])
+		self.size = dict([((x,y),1) for x in xrange(self.width()) for y in xrange(self.height())])
 
 		# find components
 		self.find_components()
 
+		# store edge roots locally
+		self.edge_roots = self.get_component_roots()
+
 		# each new component is an edge
-		edge_set = dict()
-		for key in self.get_component_roots():
+		edge_list = {}
+		for (x,y) in self.get_vertices():
+			d = d+1
+			square = set([(x+i,y+j) for i in xrange(-d,d+1) for j in xrange(-d,d+1)])
 
-			C = self.get_component(key)
+			for (a,b) in square:
+				root = self.get_root((a,b))
+				if root in self.edge_roots:
+					edge_list[(x,y)] = edge_list.get((x,y),set()) | set([root])
 
-			edge_set[key] = []
-			for (x,y) in self.get_vertices():
-				x,y = int(x),int(y)
-				d = 6
-				square = set([(x+i,y+j) for i in range(-d,d+1) for j in range(-d,d+1)])
-
-				if len(C & square)>0:		# NB. this is inefficient: can be improved by checking for the root of elements in square.
-					edge_set[key] += [(x,y)]
+		edges = []
+		for (u,v) in itertools.combinations (self.get_vertices(),2):
+			if len(edge_list[u] & edge_list[v])>0:
+				edges.append((u,v))
 
 		# store locally
-		self.edges = [tuple(val[:2]) for val in edge_set.values() if len(val)>1]
+		self.edges = edges
+
+
+
+	def midpoint(self,S):
+		## Returns the euclidean midpoint a list/set of nodes
+		return tuple(np.average([list(node) for node in S],axis=0).astype(int))
+
+	def find_crossings(self,closeness=20):
+
+		vertices = self.get_vertices()
+
+		for (u,v) in itertools.combinations(vertices,2):
+			if euclid_metric(u,v)<closeness:
+				midpoint = self.midpoint([u,v])
+				d = closeness/2
+				square = set([(midpoint[0]+i,midpoint[1]+j) for i in xrange(-d,d+1) for j in xrange(-d,d+1)])
+
+				crossing_edges = set()
+				for (x,y) in square:
+					root = self.get_root((x,y))
+					if root in self.edge_root:
+						crossing_edges.add(self.edge_root[root])
+
+
+
+
+
 
 
 	def get_edges(self):
@@ -243,13 +282,19 @@ class ImageArray:
 			self.find_edges()	# find edges if not exist
 		return self.edges
 
-
 	def get_vertices(self):
 		## Returns list of vertices
 
 		if not self.vertices:
 			self.find_vertices()	# find edges if not exist
 		return self.vertices
+
+	def get_crossings(self):
+		## Returns list of crossings
+
+		if not self.crossings:
+			self.find_crossings()	# find crossings if not exist
+		return self.crossings
 
 	def to_graph(self):
 		## Return NetworkX Graph object
@@ -291,6 +336,7 @@ if __name__ == '__main__':
 	components = I.get_component_roots()
 
 	print("Components: {0}".format(str(components)[1:-1]))
+
 
 	print("Finding vertices...")
 	vertices = I.get_vertices()
